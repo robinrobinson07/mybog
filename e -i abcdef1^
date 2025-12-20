@@ -1,0 +1,12 @@
+[33mc922bf1[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m)[m change storing method from json to firebase
+[33m67e62b4[m new pokemon module
+[33mddf53f1[m[33m ([m[1;31morigin/main[m[33m)[m Update requirements.txt
+[33ma031b0f[m Update __init__.py
+[33mc3cc1f5[m Update anime.py
+[33ma2b6786[m Create msilib.py
+[33mf25617e[m Create .python-version
+[33mda7b1eb[m Update main.py
+[33mcec7d8f[m Add Flask to requirements
+[33m3a69fcb[m Heroku deploy setup (web+worker, env token)
+[33m49b1c5d[m Hồi sinh con vợ
+[33m7550c41[m[33m ([m[1;31morigin/master[m[33m)[m con vợ hồi sinh
