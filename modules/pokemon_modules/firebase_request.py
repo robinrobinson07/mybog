@@ -1,149 +1,188 @@
 import requests
-import statistics
-from functools import lru_cache
+import asyncio
+import concurrent.futures
+from functools import partial
+import re
 
 FIREBASE_URL = "https://vo-robin-default-rtdb.asia-southeast1.firebasedatabase.app/pokemondata"
 
 class PokemonService:
     def __init__(self):
+        self.cache = {}
+        self.is_ready = False
         self.session = requests.Session()
+        # Executor chính cho các tác vụ nền
+        self.main_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
-    @lru_cache(maxsize=32)
-    def get_formats(self, gen: str) -> list[str]:
-        """Lấy danh sách format của một Gen (dùng shallow=true để chỉ lấy key)"""
-        url = f"{FIREBASE_URL}/{gen}.json?shallow=true"
+    def _fetch_sync(self, url):
+        """Hàm fetch cơ bản"""
         try:
             r = self.session.get(url, timeout=5)
-            if r.status_code == 200 and r.json():
-                return list(r.json().keys())
-            return []
-        except Exception:
-            return []
-
-    @lru_cache(maxsize=64)
-    def get_ratings(self, gen: str, fmt: str) -> list[str]:
-        """Lấy danh sách rating của Format"""
-        url = f"{FIREBASE_URL}/{gen}/{fmt}.json?shallow=true"
-        try:
-            r = self.session.get(url, timeout=5)
-            if r.status_code == 200 and r.json():
-                ratings = list(r.json().keys())
-                # Sort số (0, 1500, 1695) cho đẹp
-                try:
-                    ratings.sort(key=int)
-                except:
-                    pass
-                return ratings
-            return []
-        except Exception:
-            return []
-
-    @lru_cache(maxsize=128)
-    def get_pokemons(self, gen: str, fmt: str, rating: str) -> list[str]:
-        """Lấy danh sách Pokemon. Nếu rating='all', lấy list của rating đầu tiên tìm thấy"""
-        target_rating = rating
-        if rating == "all":
-            # Nếu all, lấy rating thấp nhất (thường là '0' hoặc '1500') để có list pokemon đầy đủ nhất
-            avail_ratings = self.get_ratings(gen, fmt)
-            if avail_ratings:
-                target_rating = avail_ratings[0]
-            else:
-                return []
-        
-        url = f"{FIREBASE_URL}/{gen}/{fmt}/{target_rating}.json?shallow=true"
-        try:
-            r = self.session.get(url, timeout=5)
-            if r.status_code == 200 and r.json():
-                return sorted(list(r.json().keys()))
-            return []
-        except Exception:
-            return []
-
-    def get_pokemon_data(self, gen: str, fmt: str, rating: str, pokemon: str):
-        """Lấy dữ liệu chi tiết. Xử lý logic gộp nếu rating='all'"""
-        if rating != "all":
-            url = f"{FIREBASE_URL}/{gen}/{fmt}/{rating}/{pokemon}.json"
-            r = self.session.get(url, timeout=10)
             if r.status_code == 200:
                 return r.json()
             return None
-        else:
-            return self._get_avg_data(gen, fmt, pokemon)
-
-    def _get_avg_data(self, gen: str, fmt: str, pokemon: str):
-        """Logic tính trung bình cộng cho rating 'all'"""
-        ratings = self.get_ratings(gen, fmt)
-        if not ratings:
+        except Exception:
             return None
 
-        # Container để cộng dồn dữ liệu
-        # Cấu trúc: { 'sections': { 'Moves': {'Earthquake': [80.5, 90.0]} } }
-        aggregated = {"sections": {}} 
-        valid_count = 0
+    # --- PHẦN XỬ LÝ CACHE (Giữ nguyên logic song song tối ưu ở bước trước) ---
+    def _build_cache_sync(self):
+        print("[CACHE] Bắt đầu tải dữ liệu (Parallel Requests)...")
+        all_formats = self._fetch_sync(f"{FIREBASE_URL}.json?shallow=true")
+        if not all_formats: return
 
-        for rt in ratings:
-            url = f"{FIREBASE_URL}/{gen}/{fmt}/{rt}/{pokemon}.json"
-            try:
-                r = self.session.get(url, timeout=5)
-                data = r.json()
-                if not data or "sections" not in data:
-                    continue
-                
-                valid_count += 1
-                sections = data["sections"]
-                
-                for sec_name, items in sections.items():
-                    if sec_name not in aggregated["sections"]:
-                        aggregated["sections"][sec_name] = {}
-                    
-                    # Items là list các dict: [{"name": "A", "pct": 50}, ...]
-                    for item in items:
-                        # Checks and Counters cấu trúc khác, tạm thời bỏ qua hoặc lấy của rating cao nhất
-                        # Ở đây xử lý các mục có 'pct' (Abilities, Moves, etc.)
-                        if "pct" in item:
-                            name = item.get("name")
-                            pct = item.get("pct", 0)
-                            if name not in aggregated["sections"][sec_name]:
-                                aggregated["sections"][sec_name][name] = []
-                            aggregated["sections"][sec_name][name].append(pct)
-                        elif "opponent" in item: 
-                            # Xử lý Checks and Counters: Chỉ gộp, không tính avg vì nó phức tạp
-                            if sec_name not in aggregated["sections"]:
-                                aggregated["sections"][sec_name] = []
-                            # Logic checks counters cho 'all' rất phức tạp, 
-                            # ở đây ta chỉ lấy list của rating cao nhất (thường là chuẩn nhất)
-                            # Nên tạm thời bỏ qua loop này cho C&C
-                            pass
-            except:
-                continue
+        temp_cache = {}
+        # Dùng executor riêng để bắn request cache dồn dập
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as http_executor:
+            future_to_fmt = {}
+            for fmt_full in all_formats.keys():
+                match = re.match(r"(gen[1-9])(.+)", fmt_full)
+                if not match: continue
+                gen_key, fmt_key = match.group(1), match.group(2)
+                if fmt_key.startswith("-"): fmt_key = fmt_key[1:]
 
-        if valid_count == 0:
-            return None
+                if gen_key not in temp_cache: temp_cache[gen_key] = {}
+                if fmt_key not in temp_cache[gen_key]: temp_cache[gen_key][fmt_key] = {}
 
-        # Tính trung bình và format lại về chuẩn cũ
-        final_data = {"sections": {}, "name": pokemon, "info": "Average Stats (All Ratings)"}
+                future = http_executor.submit(self._fetch_sync, f"{FIREBASE_URL}/{fmt_full}.json?shallow=true")
+                future_to_fmt[future] = (gen_key, fmt_key, fmt_full)
+
+            pokemon_tasks = {}
+            for future in concurrent.futures.as_completed(future_to_fmt):
+                gen, fmt, fmt_full = future_to_fmt[future]
+                ratings = future.result()
+                if ratings:
+                    for rating in ratings:
+                        p_future = http_executor.submit(self._fetch_sync, f"{FIREBASE_URL}/{fmt_full}/{rating}.json?shallow=true")
+                        pokemon_tasks[p_future] = (gen, fmt, rating)
+
+            for future in concurrent.futures.as_completed(pokemon_tasks):
+                gen, fmt, rating = pokemon_tasks[future]
+                p_data = future.result()
+                if p_data:
+                    temp_cache[gen][fmt][rating] = list(p_data.keys())
+
+        self.cache = temp_cache
+        self.is_ready = True
+        print(f"[CACHE] Hoàn tất! Đã tải xong.")
+
+    async def build_cache(self):
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(self.main_executor, self._build_cache_sync)
+
+    # --- GETTERS ---
+    def get_gens_cached(self) -> list[str]:
+        return list(self.cache.keys())
+    def get_formats_cached(self, gen: str) -> list[str]:
+        if gen in self.cache: return list(self.cache[gen].keys())
+        return []
+    def get_ratings_cached(self, gen: str, fmt: str) -> list[str]:
+        if gen in self.cache and fmt in self.cache[gen]:
+            ratings = list(self.cache[gen][fmt].keys())
+            try: ratings.sort(key=int)
+            except: pass
+            return ratings
+        return []
+    def get_pokemons_cached(self, gen: str, fmt: str, rating: str) -> list[str]:
+        if gen in self.cache and fmt in self.cache[gen]:
+            if rating == "all":
+                # Lấy từ rating cao nhất làm danh sách gợi ý
+                ratings = self.get_ratings_cached(gen, fmt)
+                if ratings: return self.cache[gen][fmt].get(ratings[-1], [])
+            else:
+                return self.cache[gen][fmt].get(rating, [])
+        return []
+
+    # --- LOGIC MỚI: TÍNH TRUNG BÌNH KHI RATING="ALL" ---
+    
+    def _fetch_average_data_sync(self, gen, fmt, pokemon):
+        """
+        Hàm đồng bộ: Tải tất cả rating và tính trung bình.
+        """
+        ratings = self.get_ratings_cached(gen, fmt)
+        if not ratings: return None
+
+        full_fmt = f"{gen}{fmt}"
         
-        for sec_name, items_dict in aggregated["sections"].items():
-            final_data["sections"][sec_name] = []
-            if isinstance(items_dict, dict): # Xử lý Moves, Abilities...
-                for name, pct_list in items_dict.items():
-                    avg_pct = sum(pct_list) / len(ratings) # Chia cho tổng số rating tham gia
-                    final_data["sections"][sec_name].append({
-                        "name": name,
-                        "pct": avg_pct
-                    })
-                # Sort lại theo phần trăm giảm dần
-                final_data["sections"][sec_name].sort(key=lambda x: x["pct"], reverse=True)
+        # 1. Tải dữ liệu song song từ TẤT CẢ các rating
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = []
+            for rating in ratings:
+                url = f"{FIREBASE_URL}/{full_fmt}/{rating}/{pokemon}.json"
+                futures.append(executor.submit(self._fetch_sync, url))
             
-        # Với Checks and Counters, lấy dữ liệu từ rating cao nhất (thường là chuẩn meta nhất)
-        if ratings:
-            best_rating = ratings[-1]
-            url = f"{FIREBASE_URL}/{gen}/{fmt}/{best_rating}/{pokemon}/sections/Checks and Counters.json"
-            try:
-                r = self.session.get(url)
-                if r.status_code == 200:
-                    final_data["sections"]["Checks and Counters"] = r.json()
-            except:
-                pass
+            for future in concurrent.futures.as_completed(futures):
+                data = future.result()
+                if data: results.append(data)
 
-        return final_data
+        if not results: return None
+
+        # 2. Chuẩn bị biến chứa tổng
+        # Cấu trúc: { "Moves": { "Earthquake": 180.5, ... } }
+        agg_sections = {
+            "Moves": {}, "Abilities": {}, "Items": {}, 
+            "Spreads": {}, "Tera Types": {}, "Teammates": {}
+        }
+        total_raw_count = 0
+        valid_count = len(results)
+        
+        # Dữ liệu của rating cao nhất (để dùng cho Checks & Counters hoặc fallback)
+        highest_rating_data = results[-1] if results else None
+
+        # 3. Cộng dồn dữ liệu
+        for data in results:
+            total_raw_count += data.get("raw_count", 0)
+            sections = data.get("sections", {})
+            
+            for sec_name in agg_sections.keys():
+                items = sections.get(sec_name, [])
+                for item in items:
+                    name = item.get("name")
+                    pct = item.get("pct", 0)
+                    if name:
+                        if name not in agg_sections[sec_name]:
+                            agg_sections[sec_name][name] = 0.0
+                        agg_sections[sec_name][name] += pct
+
+        # 4. Tính trung bình (Chia cho số lượng rating tham gia)
+        final_sections = {}
+        
+        for sec_name, name_map in agg_sections.items():
+            final_list = []
+            for name, total_pct in name_map.items():
+                avg_pct = total_pct / valid_count # Trung bình cộng
+                final_list.append({"name": name, "pct": avg_pct})
+            
+            # Sắp xếp giảm dần theo %
+            final_list.sort(key=lambda x: x["pct"], reverse=True)
+            final_sections[sec_name] = final_list
+
+        # 5. Xử lý riêng Checks & Counters
+        # (Không thể tính trung bình text, nên lấy của rating cao nhất làm chuẩn)
+        if highest_rating_data:
+            final_sections["Checks and Counters"] = highest_rating_data.get("sections", {}).get("Checks and Counters", [])
+
+        # 6. Trả về cấu trúc chuẩn như 1 pokemon thường
+        return {
+            "name": pokemon,
+            "raw_count": total_raw_count, # Tổng số mẫu
+            "info": f"Average stats from {valid_count} ratings ({', '.join(ratings)})",
+            "sections": final_sections
+        }
+
+    async def get_pokemon_data_async(self, gen: str, fmt: str, rating: str, pokemon: str):
+        full_fmt = f"{gen}{fmt}"
+        
+        # Nếu rating là "all", chạy logic tính trung bình
+        if rating == "all":
+            loop = asyncio.get_running_loop()
+            # Gọi hàm _fetch_average_data_sync trong thread pool
+            return await loop.run_in_executor(
+                self.main_executor, 
+                partial(self._fetch_average_data_sync, gen, fmt, pokemon)
+            )
+
+        # Nếu chọn rating cụ thể, chạy logic thường
+        url = f"{FIREBASE_URL}/{full_fmt}/{rating}/{pokemon}.json"
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.main_executor, partial(self._fetch_sync, url))
