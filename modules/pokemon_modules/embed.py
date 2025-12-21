@@ -1,24 +1,51 @@
 import disnake
 
+# --- CONFIG EMOJI (Đã cập nhật ID chuẩn) ---
+EMOJI_MAP = {
+    # Types
+    "bug": "<:bug:1452359099974025349>",
+    "dark": "<:dark:1452358985276588136>",
+    "dragon": "<:dragon:1452359006344712304>",
+    "electric": "<:electric:1452359268018950296>",
+    "fairy": "<:fairy:1452358947380924598>",
+    "fighting": "<:fighting:1452359204349411613>",
+    "fire": "<:fire:1452359312830763119>",
+    "flying": "<:flying:1452359137026642063>",
+    "ghost": "<:ghost:1452359032512708698>",
+    "rock": "<:rock:1452359056479096922>",
+    "psychic": "<:psychic:1452359119313961021>",
+    "poison": "<:poison:1452359186158583999>",
+    "normal": "<:normal:1452359347580571689>",
+    "ice": "<:ice:1452359223114600550>",
+    "ground": "<:ground:1452359159717826731>",
+    "grass": "<:grass:1452359242332897431>",
+    "steel": "<:steel:1452358966557540414>",
+    "water": "<:water:1452359285374849276>",
+    "stellar": "<:stella:1452358918658461827>",
+    
+    # Categories (Move Split)
+    "physical": "<:physical:1452359436365594716>",
+    "special": "<:special:1452359411333988556>",
+    "status": "<:status:1452359388324040855>",
+}
+
 # --- ANSI COLORS ---
 ANSI_RESET = "\u001b[0m"
-ANSI_GRAY = "\u001b[0;30m"   # Dark Gray (Background)
-ANSI_RED = "\u001b[0;31m"    # Stat < 70
-ANSI_ORANGE = "\u001b[0;33m" # Stat 70-100
-ANSI_GREEN = "\u001b[0;32m"  # Stat 100-130
-ANSI_CYAN = "\u001b[0;36m"   # Stat > 130
-ANSI_WHITE = "\u001b[0;37m"  # Text chính
-ANSI_PINK = "\u001b[0;35m"   # Highlight
+ANSI_GRAY = "\u001b[0;30m"
+ANSI_RED = "\u001b[0;31m"
+ANSI_ORANGE = "\u001b[0;33m"
+ANSI_GREEN = "\u001b[0;32m"
+ANSI_CYAN = "\u001b[0;36m"
+ANSI_WHITE = "\u001b[0;37m"
 
-DITTO_SPRITE = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/132.png"
+DITTO_SPRITE = "[https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/132.png](https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/132.png)"
 
 def _get_stat_color(value: int) -> str:
-    """Gradient Base Stats chi tiết hơn"""
-    if value >= 130: return ANSI_CYAN    # Rất cao
-    if value >= 100: return ANSI_GREEN   # Cao
-    if value >= 80:  return ANSI_ORANGE  # Trung bình khá
-    if value >= 60:  return ANSI_ORANGE  # Trung bình (dùng chung màu cam cho dễ nhìn)
-    return ANSI_RED                      # Thấp
+    if value >= 130: return ANSI_CYAN
+    if value >= 100: return ANSI_GREEN
+    if value >= 80:  return ANSI_ORANGE
+    if value >= 60:  return ANSI_ORANGE
+    return ANSI_RED
 
 def _get_pct_color(pct: float) -> str:
     if pct >= 50: return ANSI_CYAN
@@ -27,7 +54,6 @@ def _get_pct_color(pct: float) -> str:
     return ANSI_GRAY
 
 def _make_bar(current: float, total: float, length: int = 20, color_code: str = ANSI_RESET) -> str:
-    """Tạo thanh bar dài 20 ký tự: ████░░░"""
     percent = min(1.0, current / total)
     filled_len = int(length * percent)
     empty_len = length - filled_len
@@ -53,7 +79,8 @@ def create_pokedex_embed(smogon_data: dict, api_data: dict, color: disnake.Color
     if api_data.get("image_url"):
         embed.set_image(url=api_data["image_url"])
 
-    types_str = " ".join([f"[{t.upper()}]" for t in api_data['types']])
+    # [FIX] Dùng Map để lấy Emoji cho Type
+    types_str = " ".join([EMOJI_MAP.get(t.lower(), f"[{t.upper()}]") for t in api_data['types']])
     
     desc_block = (
         f"**National №**: {api_data['id']}\n"
@@ -64,7 +91,7 @@ def create_pokedex_embed(smogon_data: dict, api_data: dict, color: disnake.Color
     )
     embed.add_field(name="Pokedex Data", value=desc_block, inline=True)
 
-    # Abilities (Có %)
+    # Abilities (Giữ nguyên ANSI)
     smogon_abil = smogon_data.get("sections", {}).get("Abilities", [])
     abil_lines = []
     for i, a in enumerate(smogon_abil):
@@ -74,14 +101,13 @@ def create_pokedex_embed(smogon_data: dict, api_data: dict, color: disnake.Color
     
     embed.add_field(name="Abilities", value=f"```ansi\n" + "\n".join(abil_lines) + "\n```" if abil_lines else "None", inline=True)
     
-    # Base Stats (Bar Chart dài 20 ký tự)
+    # Base Stats (Giữ nguyên ANSI)
     stats = api_data['stats']
     stat_labels = {"hp": "HP", "attack": "Atk", "defense": "Def", "special-attack": "SpA", "special-defense": "SpD", "speed": "Spe"}
     stat_lines = []
     for key, label in stat_labels.items():
         val = stats[key]
         col = _get_stat_color(val)
-        # Max stat chuẩn là 180 để thanh bar trông đầy đặn
         bar = _make_bar(val, 180, length=20, color_code=col)
         stat_lines.append(f"{label:<4} {col}{val:>3}{ANSI_RESET} {bar}")
     
@@ -96,20 +122,27 @@ def create_build_embed(smogon_data: dict, api_data: dict, move_details: dict, co
     embed = _create_base_embed(smogon_data, color, "- Build")
     sections = smogon_data.get("sections", {})
     
-    # Moves
+    # [FIX] Moves: Bỏ ANSI Block để hiện Emoji & Sửa logic lấy key
     moves = sections.get("Moves", [])
     move_lines = []
     for m in moves[:10]:
         name = m.get("name")
         pct = m.get("pct", 0)
+        
+        # Lấy thông tin từ cache
         detail = move_details.get(name.lower(), {})
-        m_type = detail.get("type", "---").upper()[:3] 
-        m_cat = detail.get("category", "---").upper()[:3] 
-        col = _get_pct_color(pct)
-        move_lines.append(f"[{m_type}] {name:<14} ({m_cat}) {ANSI_GRAY}....{ANSI_RESET} {col}{pct:>5.1f}%{ANSI_RESET}")
-    embed.add_field(name="Top Moves", value=f"```ansi\n" + "\n".join(move_lines) + "\n```", inline=False)
+        
+        # Lấy Emoji từ Map, fallback là icon vuông
+        e_type = EMOJI_MAP.get(detail.get("type", "").lower(), "▪️")
+        e_cat = EMOJI_MAP.get(detail.get("category", "").lower(), "")
+        
+        # Format: <TypeEmoji> <CatEmoji> Name (XX.X%)
+        # Dùng markdown `code` cho % để nổi bật
+        move_lines.append(f"{e_type} {e_cat} **{name}** `({pct:.1f}%)`")
+        
+    embed.add_field(name="Top Moves", value="\n".join(move_lines) if move_lines else "No Data", inline=False)
 
-    # Items
+    # Items (Giữ nguyên ANSI)
     items = sections.get("Items", [])
     item_lines = []
     for i in items[:6]:
@@ -119,7 +152,7 @@ def create_build_embed(smogon_data: dict, api_data: dict, move_details: dict, co
         item_lines.append(f"{i['name']:<18} {col}{pct:>5.1f}%{ANSI_RESET}")
     if item_lines: embed.add_field(name="Items", value=f"```ansi\n" + "\n".join(item_lines) + "\n```", inline=False)
 
-    # Spreads
+    # Spreads (Giữ nguyên ANSI)
     spreads = sections.get("Spreads", [])
     spread_lines = []
     for s in spreads[:4]: 
