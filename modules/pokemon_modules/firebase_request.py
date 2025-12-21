@@ -3,6 +3,7 @@ import asyncio
 import concurrent.futures
 from functools import partial
 import re
+from urllib.parse import quote  # <--- THÊM DÒNG NÀY
 
 FIREBASE_URL = "https://vo-robin-default-rtdb.asia-southeast1.firebasedatabase.app/pokemondata"
 
@@ -15,6 +16,7 @@ class PokemonService:
 
     def _fetch_sync(self, url):
         try:
+            # quote() giúp xử lý các ký tự đặc biệt trong URL
             r = self.session.get(url, timeout=5)
             if r.status_code == 200:
                 return r.json()
@@ -83,15 +85,17 @@ class PokemonService:
                 return self.cache[gen][fmt].get(rating, [])
         return []
 
-    # --- LOGIC TÍNH TRUNG BÌNH TOÀN BỘ (BAO GỒM CHECKS & COUNTERS) ---
+    # --- LOGIC TÍNH TRUNG BÌNH TOÀN BỘ (SỬA URL ENCODE) ---
     def _fetch_average_data_sync(self, gen, fmt, pokemon):
         ratings = self.get_ratings_cached(gen, fmt)
         if not ratings: return None
         full_fmt = f"{gen}{fmt}"
         
+        safe_pokemon = quote(pokemon)
+
         results = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(self._fetch_sync, f"{FIREBASE_URL}/{full_fmt}/{r}/{pokemon}.json") for r in ratings]
+            futures = [executor.submit(self._fetch_sync, f"{FIREBASE_URL}/{full_fmt}/{r}/{safe_pokemon}.json") for r in ratings]
             for future in concurrent.futures.as_completed(futures):
                 data = future.result()
                 if data: results.append(data)
@@ -101,21 +105,16 @@ class PokemonService:
         total_raw_count = sum(d.get("raw_count", 0) for d in results)
         if total_raw_count == 0: total_raw_count = 1
 
-        # Dict chứa dữ liệu tổng hợp
         agg_sections = {
             "Moves": {}, "Abilities": {}, "Items": {}, 
             "Spreads": {}, "Tera Types": {}, "Teammates": {}
         }
-        
-        # Riêng cho Checks & Counters: Cần lưu tổng điểm và số lần xuất hiện
-        # Structure: "Name": {"weighted_score": 0, "detail": "...", "priority": 0}
         agg_counters = {} 
 
         for data in results:
             weight = data.get("raw_count", 0)
             sections = data.get("sections", {})
             
-            # 1. Gộp các mục thông thường (Moves, Items...)
             for sec_name in agg_sections.keys():
                 items = sections.get(sec_name, [])
                 for item in items:
@@ -125,50 +124,40 @@ class PokemonService:
                         if name not in agg_sections[sec_name]: agg_sections[sec_name][name] = 0.0
                         agg_sections[sec_name][name] += (pct * weight)
 
-            # 2. Gộp Checks & Counters
             counters = sections.get("Checks and Counters", [])
             for c in counters:
                 opp = c.get("opponent") or c.get("name")
                 if not opp: continue
                 
-                # Parse điểm số từ raw string "Name 85.5 (90...)"
                 raw = c.get("raw", "")
                 score = 0
-                match = re.search(r"([\d\.]+)", raw) # Tìm số đầu tiên
+                match = re.search(r"([\d\.]+)", raw) 
                 if match: score = float(match.group(1))
                 
                 if opp not in agg_counters:
                     agg_counters[opp] = {"weighted_score": 0.0, "detail": c.get("detail", ""), "max_weight": 0}
                 
-                # Cộng dồn điểm số có trọng số
                 agg_counters[opp]["weighted_score"] += (score * weight)
                 
-                # Lưu detail của rating có mẫu lớn nhất (độ tin cậy cao nhất)
                 if weight > agg_counters[opp]["max_weight"]:
                     agg_counters[opp]["detail"] = c.get("detail", "")
                     agg_counters[opp]["max_weight"] = weight
 
-        # Tính toán kết quả cuối cùng
         final_sections = {}
-        
-        # Xử lý mục thường
         for sec_name, name_map in agg_sections.items():
             final_list = [{"name": name, "pct": val / total_raw_count} for name, val in name_map.items()]
             final_list.sort(key=lambda x: x["pct"], reverse=True)
             final_sections[sec_name] = final_list
 
-        # Xử lý mục Counters
         final_counters = []
         for opp, val in agg_counters.items():
-            # Điểm trung bình = Tổng điểm trọng số / Tổng mẫu
             avg_score = val["weighted_score"] / total_raw_count
             final_counters.append({
                 "opponent": opp,
-                "pct": avg_score, # Lưu điểm số vào field pct để tiện sort và hiển thị
+                "pct": avg_score,
                 "detail": val["detail"]
             })
         
-        # Sắp xếp theo điểm số giảm dần
         final_counters.sort(key=lambda x: x["pct"], reverse=True)
         final_sections["Checks and Counters"] = final_counters
 
@@ -184,7 +173,8 @@ class PokemonService:
         if rating == "all":
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(self.main_executor, partial(self._fetch_average_data_sync, gen, fmt, pokemon))
-
-        url = f"{FIREBASE_URL}/{full_fmt}/{rating}/{pokemon}.json"
+        safe_pokemon = quote(pokemon)
+        url = f"{FIREBASE_URL}/{full_fmt}/{rating}/{safe_pokemon}.json"
+        
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self.main_executor, partial(self._fetch_sync, url))
