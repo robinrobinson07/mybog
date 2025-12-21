@@ -24,8 +24,9 @@ if __name__ == "__main__":
     for p in modules_dir.glob("*.py"):
         if not p.name.startswith("_"):
             bot.load_extension(f"modules.{p.stem}")
+            print(f"Loaded module: {p.stem}")
   
-    
+   
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise RuntimeError("Missing BOT_TOKEN in environment variables")
