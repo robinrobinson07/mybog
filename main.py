@@ -25,7 +25,6 @@ if __name__ == "__main__":
         if not p.name.startswith("_"):
             bot.load_extension(f"modules.{p.stem}")
             print(f"Loaded module: {p.stem}")
-  
 
     token = os.getenv("BOT_TOKEN")
     if not token:

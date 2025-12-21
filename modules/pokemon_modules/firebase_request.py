@@ -11,11 +11,9 @@ class PokemonService:
         self.cache = {}
         self.is_ready = False
         self.session = requests.Session()
-        # Executor chính cho các tác vụ nền
         self.main_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
     def _fetch_sync(self, url):
-        """Hàm fetch cơ bản"""
         try:
             r = self.session.get(url, timeout=5)
             if r.status_code == 200:
@@ -24,14 +22,12 @@ class PokemonService:
         except Exception:
             return None
 
-    # --- PHẦN XỬ LÝ CACHE (Giữ nguyên logic song song tối ưu ở bước trước) ---
     def _build_cache_sync(self):
-        print("[CACHE] Bắt đầu tải dữ liệu (Parallel Requests)...")
+        print("[CACHE] Starting data fetch (Parallel Requests)...")
         all_formats = self._fetch_sync(f"{FIREBASE_URL}.json?shallow=true")
         if not all_formats: return
 
         temp_cache = {}
-        # Dùng executor riêng để bắn request cache dồn dập
         with concurrent.futures.ThreadPoolExecutor(max_workers=20) as http_executor:
             future_to_fmt = {}
             for fmt_full in all_formats.keys():
@@ -63,18 +59,14 @@ class PokemonService:
 
         self.cache = temp_cache
         self.is_ready = True
-        print(f"[CACHE] Hoàn tất! Đã tải xong.")
+        print(f"[CACHE] Complete.")
 
     async def build_cache(self):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(self.main_executor, self._build_cache_sync)
 
-    # --- GETTERS ---
-    def get_gens_cached(self) -> list[str]:
-        return list(self.cache.keys())
-    def get_formats_cached(self, gen: str) -> list[str]:
-        if gen in self.cache: return list(self.cache[gen].keys())
-        return []
+    def get_gens_cached(self) -> list[str]: return list(self.cache.keys())
+    def get_formats_cached(self, gen: str) -> list[str]: return list(self.cache[gen].keys()) if gen in self.cache else []
     def get_ratings_cached(self, gen: str, fmt: str) -> list[str]:
         if gen in self.cache and fmt in self.cache[gen]:
             ratings = list(self.cache[gen][fmt].keys())
@@ -85,104 +77,114 @@ class PokemonService:
     def get_pokemons_cached(self, gen: str, fmt: str, rating: str) -> list[str]:
         if gen in self.cache and fmt in self.cache[gen]:
             if rating == "all":
-                # Lấy từ rating cao nhất làm danh sách gợi ý
                 ratings = self.get_ratings_cached(gen, fmt)
                 if ratings: return self.cache[gen][fmt].get(ratings[-1], [])
             else:
                 return self.cache[gen][fmt].get(rating, [])
         return []
 
-    # --- LOGIC MỚI: TÍNH TRUNG BÌNH KHI RATING="ALL" ---
-    
+    # --- LOGIC TÍNH TRUNG BÌNH TOÀN BỘ (BAO GỒM CHECKS & COUNTERS) ---
     def _fetch_average_data_sync(self, gen, fmt, pokemon):
-        """
-        Hàm đồng bộ: Tải tất cả rating và tính trung bình.
-        """
         ratings = self.get_ratings_cached(gen, fmt)
         if not ratings: return None
-
         full_fmt = f"{gen}{fmt}"
         
-        # 1. Tải dữ liệu song song từ TẤT CẢ các rating
         results = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = []
-            for rating in ratings:
-                url = f"{FIREBASE_URL}/{full_fmt}/{rating}/{pokemon}.json"
-                futures.append(executor.submit(self._fetch_sync, url))
-            
+            futures = [executor.submit(self._fetch_sync, f"{FIREBASE_URL}/{full_fmt}/{r}/{pokemon}.json") for r in ratings]
             for future in concurrent.futures.as_completed(futures):
                 data = future.result()
                 if data: results.append(data)
 
         if not results: return None
 
-        # 2. Chuẩn bị biến chứa tổng
-        # Cấu trúc: { "Moves": { "Earthquake": 180.5, ... } }
+        total_raw_count = sum(d.get("raw_count", 0) for d in results)
+        if total_raw_count == 0: total_raw_count = 1
+
+        # Dict chứa dữ liệu tổng hợp
         agg_sections = {
             "Moves": {}, "Abilities": {}, "Items": {}, 
             "Spreads": {}, "Tera Types": {}, "Teammates": {}
         }
-        total_raw_count = 0
-        valid_count = len(results)
         
-        # Dữ liệu của rating cao nhất (để dùng cho Checks & Counters hoặc fallback)
-        highest_rating_data = results[-1] if results else None
+        # Riêng cho Checks & Counters: Cần lưu tổng điểm và số lần xuất hiện
+        # Structure: "Name": {"weighted_score": 0, "detail": "...", "priority": 0}
+        agg_counters = {} 
 
-        # 3. Cộng dồn dữ liệu
         for data in results:
-            total_raw_count += data.get("raw_count", 0)
+            weight = data.get("raw_count", 0)
             sections = data.get("sections", {})
             
+            # 1. Gộp các mục thông thường (Moves, Items...)
             for sec_name in agg_sections.keys():
                 items = sections.get(sec_name, [])
                 for item in items:
                     name = item.get("name")
                     pct = item.get("pct", 0)
                     if name:
-                        if name not in agg_sections[sec_name]:
-                            agg_sections[sec_name][name] = 0.0
-                        agg_sections[sec_name][name] += pct
+                        if name not in agg_sections[sec_name]: agg_sections[sec_name][name] = 0.0
+                        agg_sections[sec_name][name] += (pct * weight)
 
-        # 4. Tính trung bình (Chia cho số lượng rating tham gia)
+            # 2. Gộp Checks & Counters
+            counters = sections.get("Checks and Counters", [])
+            for c in counters:
+                opp = c.get("opponent") or c.get("name")
+                if not opp: continue
+                
+                # Parse điểm số từ raw string "Name 85.5 (90...)"
+                raw = c.get("raw", "")
+                score = 0
+                match = re.search(r"([\d\.]+)", raw) # Tìm số đầu tiên
+                if match: score = float(match.group(1))
+                
+                if opp not in agg_counters:
+                    agg_counters[opp] = {"weighted_score": 0.0, "detail": c.get("detail", ""), "max_weight": 0}
+                
+                # Cộng dồn điểm số có trọng số
+                agg_counters[opp]["weighted_score"] += (score * weight)
+                
+                # Lưu detail của rating có mẫu lớn nhất (độ tin cậy cao nhất)
+                if weight > agg_counters[opp]["max_weight"]:
+                    agg_counters[opp]["detail"] = c.get("detail", "")
+                    agg_counters[opp]["max_weight"] = weight
+
+        # Tính toán kết quả cuối cùng
         final_sections = {}
         
+        # Xử lý mục thường
         for sec_name, name_map in agg_sections.items():
-            final_list = []
-            for name, total_pct in name_map.items():
-                avg_pct = total_pct / valid_count # Trung bình cộng
-                final_list.append({"name": name, "pct": avg_pct})
-            
-            # Sắp xếp giảm dần theo %
+            final_list = [{"name": name, "pct": val / total_raw_count} for name, val in name_map.items()]
             final_list.sort(key=lambda x: x["pct"], reverse=True)
             final_sections[sec_name] = final_list
 
-        # 5. Xử lý riêng Checks & Counters
-        # (Không thể tính trung bình text, nên lấy của rating cao nhất làm chuẩn)
-        if highest_rating_data:
-            final_sections["Checks and Counters"] = highest_rating_data.get("sections", {}).get("Checks and Counters", [])
+        # Xử lý mục Counters
+        final_counters = []
+        for opp, val in agg_counters.items():
+            # Điểm trung bình = Tổng điểm trọng số / Tổng mẫu
+            avg_score = val["weighted_score"] / total_raw_count
+            final_counters.append({
+                "opponent": opp,
+                "pct": avg_score, # Lưu điểm số vào field pct để tiện sort và hiển thị
+                "detail": val["detail"]
+            })
+        
+        # Sắp xếp theo điểm số giảm dần
+        final_counters.sort(key=lambda x: x["pct"], reverse=True)
+        final_sections["Checks and Counters"] = final_counters
 
-        # 6. Trả về cấu trúc chuẩn như 1 pokemon thường
         return {
             "name": pokemon,
-            "raw_count": total_raw_count, # Tổng số mẫu
-            "info": f"Average stats from {valid_count} ratings ({', '.join(ratings)})",
+            "raw_count": total_raw_count,
+            "info": f"Weighted average from {len(results)} ratings ({', '.join(ratings)})",
             "sections": final_sections
         }
 
     async def get_pokemon_data_async(self, gen: str, fmt: str, rating: str, pokemon: str):
         full_fmt = f"{gen}{fmt}"
-        
-        # Nếu rating là "all", chạy logic tính trung bình
         if rating == "all":
             loop = asyncio.get_running_loop()
-            # Gọi hàm _fetch_average_data_sync trong thread pool
-            return await loop.run_in_executor(
-                self.main_executor, 
-                partial(self._fetch_average_data_sync, gen, fmt, pokemon)
-            )
+            return await loop.run_in_executor(self.main_executor, partial(self._fetch_average_data_sync, gen, fmt, pokemon))
 
-        # Nếu chọn rating cụ thể, chạy logic thường
         url = f"{FIREBASE_URL}/{full_fmt}/{rating}/{pokemon}.json"
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self.main_executor, partial(self._fetch_sync, url))
