@@ -3,7 +3,7 @@ import asyncio
 import concurrent.futures
 from functools import partial
 import re
-from urllib.parse import quote  # <--- THÊM DÒNG NÀY
+from urllib.parse import quote
 
 FIREBASE_URL = "https://vo-robin-default-rtdb.asia-southeast1.firebasedatabase.app/pokemondata"
 
@@ -16,12 +16,14 @@ class PokemonService:
 
     def _fetch_sync(self, url):
         try:
-            # quote() giúp xử lý các ký tự đặc biệt trong URL
+            # [LOG] Log URL gọi đi
+            # print(f"[FIREBASE-REQ] GET {url}") 
             r = self.session.get(url, timeout=5)
             if r.status_code == 200:
                 return r.json()
             return None
-        except Exception:
+        except Exception as e:
+            print(f"[FIREBASE-ERR] Fetch fail: {e}")
             return None
 
     def _build_cache_sync(self):
@@ -85,13 +87,15 @@ class PokemonService:
                 return self.cache[gen][fmt].get(rating, [])
         return []
 
-    # --- LOGIC TÍNH TRUNG BÌNH TOÀN BỘ (SỬA URL ENCODE) ---
+    # --- LOGIC TÍNH TRUNG BÌNH ---
     def _fetch_average_data_sync(self, gen, fmt, pokemon):
         ratings = self.get_ratings_cached(gen, fmt)
         if not ratings: return None
         full_fmt = f"{gen}{fmt}"
         
         safe_pokemon = quote(pokemon)
+        # [LOG]
+        print(f"[DEBUG-FIREBASE] Calc Average for '{pokemon}' -> Safe: '{safe_pokemon}'")
 
         results = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
@@ -109,6 +113,7 @@ class PokemonService:
             "Moves": {}, "Abilities": {}, "Items": {}, 
             "Spreads": {}, "Tera Types": {}, "Teammates": {}
         }
+        
         agg_counters = {} 
 
         for data in results:
@@ -131,7 +136,7 @@ class PokemonService:
                 
                 raw = c.get("raw", "")
                 score = 0
-                match = re.search(r"([\d\.]+)", raw) 
+                match = re.search(r"([\d\.]+)", raw)
                 if match: score = float(match.group(1))
                 
                 if opp not in agg_counters:
@@ -169,12 +174,19 @@ class PokemonService:
         }
 
     async def get_pokemon_data_async(self, gen: str, fmt: str, rating: str, pokemon: str):
+        print(f"[DEBUG-FIREBASE] get_pokemon_data_async CALLED. Input: {pokemon}")
         full_fmt = f"{gen}{fmt}"
+        
         if rating == "all":
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(self.main_executor, partial(self._fetch_average_data_sync, gen, fmt, pokemon))
+
         safe_pokemon = quote(pokemon)
+        # [LOG]
+        print(f"[DEBUG-FIREBASE] Single Fetch -> Safe Name: '{safe_pokemon}'")
+        
         url = f"{FIREBASE_URL}/{full_fmt}/{rating}/{safe_pokemon}.json"
+        print(f"[DEBUG-FIREBASE] URL: {url}")
         
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self.main_executor, partial(self._fetch_sync, url))

@@ -2,6 +2,7 @@ import disnake
 from disnake.ext import commands
 import asyncio
 from modules.pokemon_modules import embed as p_embed, firebase_request, poke_api
+import traceback # Import traceback
 
 firebase_service = firebase_request.PokemonService()
 pokeapi_service = poke_api.PokeApiService()
@@ -40,17 +41,10 @@ class PokemonView(disnake.ui.View):
         
         names = []
         for item in items_slice:
-            # Lấy tên từ key chuẩn trước
             n = item.get("name") or item.get("opponent")
-            
-            # Chỉ khi không có key chuẩn mới lấy từ raw và cắt chuỗi
             if not n:
                 raw = item.get("raw", "Unknown")
                 n = raw.split()[0]
-            
-            # TUYỆT ĐỐI KHÔNG DÙNG: if " " in n: n = n.split()[0] 
-            # Vì nó sẽ biến "Iron Valiant" thành "Iron" -> Lỗi ảnh
-            
             names.append(n)
         
         sprites = await pokeapi_service.get_sprites_batch(names)
@@ -107,36 +101,52 @@ class PokemonCog(commands.Cog):
             print("⏳ Starting background task...")
             self.bot.loop.create_task(firebase_service.build_cache())
 
-    @commands.slash_command(name="pokemon_search", description="Search Pokemon stats (Smogon + PokéAPI)")
+    @commands.slash_command(name="pokemon_search", description="Search Pokemon stats from Smogon database")
     async def pokemon_search(self, inter: disnake.ApplicationCommandInteraction, gen: str, format: str, rating: str, pokemon: str):
+        # [LOG]
+        print(f"\n--- [CMD] New Search: {pokemon} (Gen:{gen} Fmt:{format}) ---")
         await inter.response.defer()
         
-        smogon_task = firebase_service.get_pokemon_data_async(gen, format, rating, pokemon)
-        api_task = pokeapi_service.get_pokemon_static_data(pokemon)
-        results = await asyncio.gather(smogon_task, api_task)
-        smogon_data, api_data = results[0], results[1]
+        try:
+            print("[CMD] Creating tasks...")
+            smogon_task = firebase_service.get_pokemon_data_async(gen, format, rating, pokemon)
+            api_task = pokeapi_service.get_pokemon_static_data(pokemon)
+            
+            print("[CMD] Awaiting gather...")
+            results = await asyncio.gather(smogon_task, api_task)
+            print("[CMD] Gather complete.")
+            
+            smogon_data, api_data = results[0], results[1]
 
-        if not smogon_data:
-            await inter.edit_original_message(content=f"❌ No Smogon data found for **{pokemon}**.")
-            return
+            if not smogon_data:
+                print(f"[CMD] Smogon Data Missing for {pokemon}")
+                await inter.edit_original_message(content=f"❌ No Smogon data found for **{pokemon}**.")
+                return
 
-        move_cache = {}
-        if smogon_data.get("sections", {}).get("Moves"):
-            top_moves = smogon_data["sections"]["Moves"][:10]
-            move_tasks = [pokeapi_service.get_move_details(m["name"]) for m in top_moves]
-            move_details = await asyncio.gather(*move_tasks)
-            for i, m in enumerate(top_moves):
-                if move_details[i]: move_cache[m["name"].lower()] = move_details[i]
+            move_cache = {}
+            if smogon_data.get("sections", {}).get("Moves"):
+                top_moves = smogon_data["sections"]["Moves"][:10]
+                move_tasks = [pokeapi_service.get_move_details(m["name"]) for m in top_moves]
+                move_details = await asyncio.gather(*move_tasks)
+                for i, m in enumerate(top_moves):
+                    if move_details[i]: move_cache[m["name"].lower()] = move_details[i]
 
-        color = disnake.Color.from_rgb(43, 45, 49)
-        embed = p_embed.create_pokedex_embed(smogon_data, api_data, color)
-        view = PokemonView(smogon_data, api_data, move_cache, color)
-        await inter.edit_original_message(embed=embed, view=view)
+            print("[CMD] Building Embed...")
+            color = disnake.Color.from_rgb(43, 45, 49)
+            embed = p_embed.create_pokedex_embed(smogon_data, api_data, color)
+            view = PokemonView(smogon_data, api_data, move_cache, color)
+            await inter.edit_original_message(embed=embed, view=view)
+            print("[CMD] Success.\n")
+        
+        except Exception as e:
+            print(f"!!! [CMD ERROR] {e}")
+            traceback.print_exc()
+            await inter.edit_original_message(content=f"Error: {e}")
 
     # --- AUTOCOMPLETE ---
     @pokemon_search.autocomplete("gen")
     async def gen_autocomp(self, inter, user_input):
-        options = firebase_service.get_gens_cached()
+        options = sorted(firebase_service.get_gens_cached())
         return [g for g in options if user_input.lower() in g][:25]
     @pokemon_search.autocomplete("format")
     async def format_autocomp(self, inter, user_input):
