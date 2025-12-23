@@ -7,49 +7,43 @@ import json
 # Lưu ý: Với Firebase REST API, luôn phải thêm đuôi ".json" vào cuối đường dẫn
 BASE_DB_URL = "https://vo-robin-default-rtdb.asia-southeast1.firebasedatabase.app/pokemondata/noi-tu"
 
-def check_dictionary(word):
-    """Kiểm tra từ có tồn tại qua Free Dictionary API"""
-    url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word.lower()}"
-    try:
-        response = requests.get(url, timeout=3)
-        return response.status_code == 200
-    except:
-        # Nếu lỗi mạng api từ điển, tạm thời cho qua hoặc chặn tùy bạn
-        return False
+# def check_dictionary(word):
+#     """Kiểm tra từ có tồn tại qua Free Dictionary API"""
+#     url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word.lower()}"
+#     try:
+#         response = requests.get(url, timeout=3)
+#         return response.status_code == 200
+#     except:
+#         # Nếu lỗi mạng api từ điển, tạm thời cho qua hoặc chặn tùy bạn
+#         return False
 
 def check_cambridge_dictionary(word):
     """
-    Kiểm tra từ trên Cambridge Dictionary bằng cách quét nội dung trang.
+    Check tồn tại bằng cách chỉ đọc 1.5KB đầu tiên của HTML.
+    Cực nhanh, không cần loop.
     """
     clean_word = word.strip().lower()
     word_for_url = clean_word.replace(" ", "-")
-    
     url = f"https://dictionary.cambridge.org/dictionary/english/{word_for_url}"
-    print(url)
+    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
 
     try:
-        response = requests.get(url, headers=headers, timeout=5)
-
-        if response.status_code == 200:
-            target_phrase = f"english meaning - cambridge dictionary"
-            
-            # Kiểm tra xem cụm từ đó có trong HTML không (so sánh chữ thường hết)
-            if target_phrase in response.text.lower():
-                return True
-            else:
-                # Nếu trả về 200 nhưng không tìm thấy dòng định nghĩa -> Từ không tồn tại (hoặc bị redirect sang trang suggest)
-                #print(response.text)  # Debug line to inspect the response content
+        with requests.get(url, headers=headers, stream=True, timeout=5) as response:
+            if response.status_code != 200:
                 return False
+            first_chunk = next(response.iter_content(chunk_size=1500), b"")
+            head_content = first_chunk.decode('utf-8', errors='ignore').lower()
+            if "english meaning - cambridge dictionary" in head_content:
+                return True
                 
-                
+            return False
+
+    except:
         return False
 
-    except requests.RequestException:
-        # Lỗi mạng
-        return False
 
 
 class NoiTu(commands.Cog):
@@ -167,7 +161,7 @@ class NoiTu(commands.Cog):
             return
 
         # RULE 4: Check API từ điển
-        if not check_dictionary(current_word) and not check_cambridge_dictionary(current_word):
+        if not check_cambridge_dictionary(current_word):
             await message.reply(f"<:Youknowintermof:1281988506113146930> Từ **'{current_word}'** không có trong từ điển!", delete_after=10)
             #await message.delete(delay=5)
             return
