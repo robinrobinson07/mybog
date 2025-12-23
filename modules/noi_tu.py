@@ -17,6 +17,41 @@ def check_dictionary(word):
         # Nếu lỗi mạng api từ điển, tạm thời cho qua hoặc chặn tùy bạn
         return False
 
+def check_cambridge_dictionary(word):
+    """
+    Kiểm tra từ trên Cambridge Dictionary bằng cách quét nội dung trang.
+    """
+    clean_word = word.strip().lower()
+    word_for_url = clean_word.replace(" ", "-")
+    
+    url = f"https://dictionary.cambridge.org/dictionary/english/{word_for_url}"
+    print(url)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+
+        if response.status_code == 200:
+            target_phrase = f"english meaning - cambridge dictionary"
+            
+            # Kiểm tra xem cụm từ đó có trong HTML không (so sánh chữ thường hết)
+            if target_phrase in response.text.lower():
+                return True
+            else:
+                # Nếu trả về 200 nhưng không tìm thấy dòng định nghĩa -> Từ không tồn tại (hoặc bị redirect sang trang suggest)
+                #print(response.text)  # Debug line to inspect the response content
+                return False
+                
+                
+        return False
+
+    except requests.RequestException:
+        # Lỗi mạng
+        return False
+
+
 class NoiTu(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -132,7 +167,7 @@ class NoiTu(commands.Cog):
             return
 
         # RULE 4: Check API từ điển
-        if not check_dictionary(current_word):
+        if not check_dictionary(current_word) and not check_cambridge_dictionary(current_word):
             await message.reply(f"<:Youknowintermof:1281988506113146930> Từ **'{current_word}'** không có trong từ điển!", delete_after=10)
             #await message.delete(delay=5)
             return
