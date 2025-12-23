@@ -113,7 +113,7 @@ class NoiTu(commands.Cog):
 
         #RULE 1: Không được chơi 2 lượt liên tiếp
         if player_id == last_player_id:
-            await message.reply("<:7541sageshy:1072406955466952754> Bạn vừa chơi rồi, hãy đợi người khác nhé!", delete_after=5)
+            await message.reply("<:7541sageshy:1072406955466952754> Bạn vừa chơi rồi, hãy đợi người khác nhé!")
             #await message.delete(delay=5) # Xóa tin nhắn sai cho sạch
             return
 
@@ -121,19 +121,19 @@ class NoiTu(commands.Cog):
         if last_word:
             required_char = last_word[-1]
             if current_word[0] != required_char:
-                await message.reply(f"❌ Từ phải bắt đầu bằng **'{required_char}'**", delete_after=5)
+                await message.reply(f"❌ Từ phải bắt đầu bằng **'{required_char}'**")
                 #await message.delete(delay=5)
                 return
 
         # RULE 3: Kiểm tra trùng lặp (đã có trong history chưa)
         if current_word in history:
-            await message.reply(f"⚠️ Từ **'{current_word}'** đã được sử dụng rồi!", delete_after=5)
+            await message.reply(f"⚠️ Từ **'{current_word}'** đã được sử dụng rồi!")
             #await message.delete(delay=5)
             return
 
         # RULE 4: Check API từ điển
         if not check_dictionary(current_word):
-            await message.reply(f"<:Youknowintermof:1281988506113146930> Từ **'{current_word}'** không có trong từ điển!", delete_after=5)
+            await message.reply(f"<:Youknowintermof:1281988506113146930> Từ **'{current_word}'** không có trong từ điển!")
             #await message.delete(delay=5)
             return
 
