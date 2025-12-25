@@ -2,7 +2,7 @@ import disnake
 from disnake.ext import commands
 import requests
 import json
-from unicode import unicode
+from unidecode import unidecode
 
 # --- CẤU HÌNH FIREBASE URL ---
 # Lưu ý: Với Firebase REST API, luôn phải thêm đuôi ".json" vào cuối đường dẫn
@@ -129,7 +129,7 @@ class NoiTu(commands.Cog):
             return
 
         # --- LOGIC GAME ---
-        current_word = unicode(message.content.strip().lower())
+        current_word = unidecode(message.content.strip().lower())
         player_id = str(message.author.id)
 
         # Chỉ bắt từ đơn (không có dấu cách)
