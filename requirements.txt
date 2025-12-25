@@ -2,3 +2,4 @@ disnake
 flask
 requests
 animec
+unicode
