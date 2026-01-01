@@ -166,6 +166,9 @@ class NoiTu(commands.Cog):
             await message.reply(f"<:Youknowintermof:1281988506113146930> Từ **'{current_word}'** không có trong từ điển!", delete_after=10)
             #await message.delete(delay=5)
             return
+        # RULE 5: Nếu tận cùng là 'y' thì chửi (nhưng vẫn tính là đúng luật để game tiếp tục)
+        if current_word.endswith('y'):
+            await message.reply(f"dcm <@{player_id}> tự búng chim 100 cái đi <:7863crysage:1215676192951115847>")
 
         # --- UPDATE FIREBASE ---
         # 1. Update thông tin người chơi và từ cuối
