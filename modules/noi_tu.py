@@ -129,7 +129,12 @@ class NoiTu(commands.Cog):
             return
 
         # --- LOGIC GAME ---
-        current_word = unidecode(message.content.strip().lower())
+        raw_content = unidecode(message.content.strip().lower())
+        
+        # Dùng Regex xóa tất cả ký tự KHÔNG phải chữ/số ở CUỐI chuỗi
+        # [^a-z0-9]: Những ký tự không phải chữ thường hoặc số
+        # +$: Xuất hiện 1 hoặc nhiều lần ở cuối dòng
+        current_word = re.sub(r'[^a-z0-9]+$', '', raw_content)
         player_id = str(message.author.id)
 
         # Chỉ bắt từ đơn (không có dấu cách)
