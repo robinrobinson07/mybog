@@ -3,7 +3,7 @@ from disnake.ext import commands
 import requests
 import json
 from unidecode import unidecode
-
+import re
 # --- CẤU HÌNH FIREBASE URL ---
 # Lưu ý: Với Firebase REST API, luôn phải thêm đuôi ".json" vào cuối đường dẫn
 BASE_DB_URL = "https://vo-robin-default-rtdb.asia-southeast1.firebasedatabase.app/pokemondata/noi-tu"
@@ -37,7 +37,7 @@ def check_cambridge_dictionary(word):
                 return False
             first_chunk = next(response.iter_content(chunk_size=1500), b"")
             head_content = first_chunk.decode('utf-8', errors='ignore').lower()
-            if "english meaning - cambridge dictionary" in head_content:
+            if "english meaning - cambridge dictionary" in head_content and response.url==url:
                 return True
                 
             return False
@@ -129,16 +129,12 @@ class NoiTu(commands.Cog):
             return
 
         # --- LOGIC GAME ---
-        raw_content = unidecode(message.content.strip().lower())
-        
-        # Dùng Regex xóa tất cả ký tự KHÔNG phải chữ/số ở CUỐI chuỗi
-        # [^a-z0-9]: Những ký tự không phải chữ thường hoặc số
-        # +$: Xuất hiện 1 hoặc nhiều lần ở cuối dòng
-        current_word = re.sub(r'[^a-z0-9]+$', '', raw_content)
+        raw_content = message.content.strip().lower()
+        current_word = re.sub(r'[^a-z0-9]+$', '', unidecode(raw_content))
         player_id = str(message.author.id)
 
         # Chỉ bắt từ đơn (không có dấu cách)
-        if " " in current_word:
+        if " " in current_word or current_word != raw_content or current_word == "":
             return 
 
         last_player_id = data.get("last_player_id", "")
