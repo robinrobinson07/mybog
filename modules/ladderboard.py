@@ -20,13 +20,22 @@ class Ladderboard(commands.Cog):
         self._lock = asyncio.Lock()
 
     def _safe_int(self, x, default=0):
+        """Dùng cho User ID (giữ nguyên là int)"""
         try:
             return int(x)
         except Exception:
             return default
 
+    def _safe_float(self, x, default=0.0):
+        """Dùng cho điểm số (chuyển sang float)"""
+        try:
+            return float(x)
+        except Exception:
+            return default
+
     # ------------------ synchronous helpers using requests ------------------
-    def _get_bucket_sync(self, guild_id: int) -> Dict[str, int]:
+    # Type hint trả về float cho value
+    def _get_bucket_sync(self, guild_id: int) -> Dict[str, float]:
         """GET /ladderboard/{guild_id}.json"""
         try:
             url = _url(f"ladderboard/{guild_id}")
@@ -40,7 +49,8 @@ class Ladderboard(commands.Cog):
             # network / firebase error -> trả về rỗng (caller có thể xử lý)
             return {}
 
-    def _set_user_score_sync(self, guild_id: int, user_id: int, points: int) -> bool:
+    # Points type hint đổi thành float
+    def _set_user_score_sync(self, guild_id: int, user_id: int, points: float) -> bool:
         """PUT /ladderboard/{guild_id}/{user_id}.json"""
         try:
             url = _url(f"ladderboard/{guild_id}/{user_id}")
@@ -61,10 +71,10 @@ class Ladderboard(commands.Cog):
             return False
 
     # ------------------ async wrappers (to avoid blocking event loop) ------------------
-    async def _get_bucket(self, guild_id: int) -> Dict[str, int]:
+    async def _get_bucket(self, guild_id: int) -> Dict[str, float]:
         return await asyncio.to_thread(self._get_bucket_sync, guild_id)
 
-    async def _set_user_score(self, guild_id: int, user_id: int, points: int) -> bool:
+    async def _set_user_score(self, guild_id: int, user_id: int, points: float) -> bool:
         return await asyncio.to_thread(self._set_user_score_sync, guild_id, user_id, points)
 
     async def _delete_user(self, guild_id: int, user_id: int) -> bool:
@@ -82,7 +92,7 @@ class Ladderboard(commands.Cog):
         self,
         interaction: disnake.ApplicationCommandInteraction,
         user: disnake.Member,
-        points: int
+        points: float  # Đổi int thành float
     ):
         if interaction.guild is None:
             await interaction.response.send_message("Lệnh này chỉ dùng trong server.", ephemeral=True)
@@ -93,7 +103,8 @@ class Ladderboard(commands.Cog):
             return
 
         async with self._lock:
-            ok = await self._set_user_score(interaction.guild.id, user.id, int(points))
+            # Ép kiểu float khi lưu
+            ok = await self._set_user_score(interaction.guild.id, user.id, float(points))
 
         if not ok:
             await interaction.response.send_message("Lỗi khi lưu dữ liệu lên Firebase.", ephemeral=True)
@@ -116,7 +127,7 @@ class Ladderboard(commands.Cog):
         self,
         interaction: disnake.ApplicationCommandInteraction,
         user: disnake.Member,
-        points: int
+        points: float  # Đổi int thành float
     ):
         if interaction.guild is None:
             await interaction.response.send_message("Lệnh này chỉ dùng trong server.", ephemeral=True)
@@ -128,8 +139,9 @@ class Ladderboard(commands.Cog):
 
         async with self._lock:
             bucket = await self._get_bucket(interaction.guild.id)
-            current = self._safe_int(bucket.get(str(user.id), 0))
-            new_score = current + int(points)
+            # Dùng _safe_float cho điểm số hiện tại
+            current = self._safe_float(bucket.get(str(user.id), 0.0))
+            new_score = current + float(points)
             ok = await self._set_user_score(interaction.guild.id, user.id, new_score)
 
         if not ok:
@@ -203,7 +215,8 @@ class Ladderboard(commands.Cog):
 
         items = []
         for uid, pts in bucket.items():
-            items.append((self._safe_int(uid, 0), self._safe_int(pts, 0)))
+            # uid giữ là safe_int, pts đổi thành safe_float
+            items.append((self._safe_int(uid, 0), self._safe_float(pts, 0.0)))
 
         items.sort(key=lambda x: (-x[1], x[0]))
         top = items[:limit]
@@ -220,6 +233,8 @@ class Ladderboard(commands.Cog):
 
         lines = []
         for i, (uid, pts) in enumerate(top, start=1):
+            # pts giờ là float, python sẽ tự format (ví dụ 5.5 hoặc 5.0)
+            # Bạn có thể dùng {pts:.2f} nếu muốn cố định 2 số thập phân
             lines.append(f"**#{i}** <@{uid}>  |  **{pts}** điểm")
 
         embed.description = "\n".join(lines)
